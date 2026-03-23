@@ -1,22 +1,19 @@
 ﻿using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Data.SqlClient;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using SharpCompress.Common;
 using SharpCompress.Readers;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement.Rebar;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
-using System.Linq;
 
 namespace ScriptDataTool
 {
-    public partial class Form1 : Form
+    public partial class UnZipForm : Form
     {
         private bool _isRunning = false;
         private int _totalExtracted = 0;
@@ -27,7 +24,7 @@ namespace ScriptDataTool
         // Thư mục output gốc
         private string _rootOutputFolder = "";
 
-        public Form1()
+        public UnZipForm()
         {
             InitializeComponent();
         }
@@ -369,8 +366,13 @@ namespace ScriptDataTool
             {
                 string slugTitle = ToSlug(info.TitlSort, 15);
 
-                newBibFolderName = slugTitle + "_" + info.BibIndexAutor;
-                AppendLog("  Tên mới: " + newBibFolderName);
+                // Kiểm tra trùng: nếu có BibId khác cùng ShortPath có cùng Titl_Sort
+                // → nối thêm BibIndexAutor để đảm bảo unique
+                bool hasDup = HasDuplicateSlugInSameFolder(bibId, info.TitlSort);
+                newBibFolderName = hasDup
+                    ? slugTitle + "_" + info.BibIndexAutor
+                    : slugTitle;
+                AppendLog("  Tên mới: " + newBibFolderName + (hasDup ? " (có trùng, đã nối BibIndexAutor)" : ""));
             }
             else
             {
@@ -425,18 +427,28 @@ namespace ScriptDataTool
 
                 string ext = Path.GetExtension(filePath).ToLower();
 
-                // Ưu tiên dùng FileName từ DB (không có extension) làm tên subfolder VÀ *** kèm theo chuẩn hóa viết hoa chữ cái đầu và viết liền ***
+                // Ưu tiên dùng FileName từ DB (không có extension) làm tên subfolder
                 // Fallback: newBibFolderName + _001 nếu FileName rỗng
-                string _subFolderName = !string.IsNullOrEmpty(mapping.FileName)
-                    ? mapping.FileName
-                    : newBibFolderName + "_" + counter.ToString("D3");
+                string baseName;
 
-                string subFolderName = ToSlug(_subFolderName, 15);
+                if (!string.IsNullOrWhiteSpace(mapping.FileName))
+                {
+                    baseName = mapping.FileName;
+                }
+                else
+                {
+                    baseName = $"{newBibFolderName}_{counter:D3}";
+                    counter++;   // ⭐ chỉ tăng ở đây
+                }
 
-                subFolderName = GetUniqueFolderPath(Path.Combine(bibOutputFolder, subFolderName))
-                    .Substring(bibOutputFolder.Length).TrimStart(Path.DirectorySeparatorChar);
-                string subFolderPath = Path.Combine(bibOutputFolder, subFolderName);
-                counter++;
+                string slug = ToSlug(baseName, 15);
+
+                string uniqueFullPath = GetUniqueFolderPath(
+                    Path.Combine(bibOutputFolder, slug)
+                );
+
+                string subFolderName = Path.GetFileName(uniqueFullPath);
+                string subFolderPath = uniqueFullPath;
 
                 AppendLog("  [" + ext.TrimStart('.').ToUpper() + "] "
                           + Path.GetFileName(filePath) + " → " + subFolderPath);
@@ -543,6 +555,58 @@ namespace ScriptDataTool
                 AppendLog("  [DB ERROR] QueryBibInfo: " + ex.Message);
             }
             return null;
+        }
+
+        // =====================================================================
+        // KIỂM TRA TRÙNG TÊN SLUG TRONG CÙNG THƯ MỤC (ShortPath = 6 cấp đầu)
+        // Dùng cùng logic PARTITION BY Titl_Sort, ShortPath như SQL báo cáo
+        // =====================================================================
+        private bool HasDuplicateSlugInSameFolder(string bibId, string titlSort)
+        {
+            try
+            {
+                string connString = ConfigurationManager.ConnectionStrings["MyDbConn"].ConnectionString;
+                // ShortPath = 6 cấp đầu của FilePath (E:\THUVIEN\FileContent\year\mm\dd\)
+                // Đếm xem có BibId khác (khác @BibId hiện tại) nào cùng ShortPath
+                // mà có Titl_Sort giống nhau không
+                string sql = @"
+                    WITH ShortPaths AS (
+                        SELECT f.Bib_Id,
+                               LEFT(f.FilePath,
+                                    CHARINDEX('\', f.FilePath,
+                                    CHARINDEX('\', f.FilePath,
+                                    CHARINDEX('\', f.FilePath,
+                                    CHARINDEX('\', f.FilePath,
+                                    CHARINDEX('\', f.FilePath,
+                                    CHARINDEX('\', f.FilePath) + 1) + 1) + 1) + 1) + 1)
+                               ) AS ShortPath
+                        FROM Dl_DigitalFile f
+                        INNER JOIN Dl_Bib b ON f.Bib_Id = b.ID
+                        WHERE b.Titl_Sort = @TitlSort
+                    ),
+                    MySP AS (
+                        SELECT ShortPath FROM ShortPaths WHERE Bib_Id = @BibId
+                    )
+                    SELECT COUNT(*)
+                    FROM ShortPaths sp
+                    INNER JOIN MySP m ON sp.ShortPath = m.ShortPath
+                    WHERE sp.Bib_Id <> @BibId";
+
+                using (var conn = new SqlConnection(connString))
+                using (var cmd = new SqlCommand(sql, conn))
+                {
+                    cmd.Parameters.AddWithValue("@BibId", bibId);
+                    cmd.Parameters.AddWithValue("@TitlSort", titlSort);
+                    conn.Open();
+                    int count = (int)cmd.ExecuteScalar();
+                    return count > 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("  [DB ERROR] HasDuplicateSlug: " + ex.Message);
+                return true; // An toàn: nếu lỗi thì nối BibIndexAutor để chắc chắn unique
+            }
         }
 
         // =====================================================================
@@ -670,7 +734,7 @@ namespace ScriptDataTool
             // 6. Nếu tiêu đề gốc dài hơn số từ đã lấy, thêm "_" ở cuối để đánh dấu "còn nữa"
             if (isTruncated)
             {
-                result += "_";
+                result += "";
             }
 
             return result;
@@ -758,6 +822,18 @@ namespace ScriptDataTool
                     lblProgress.Text = "Đã giải nén: " + _totalExtracted + " file | Lỗi: " + _totalErrors));
             else
                 lblProgress.Text = "Đã giải nén: " + _totalExtracted + " file | Lỗi: " + _totalErrors;
+        }
+
+        private void btnScanSwf_Click(object sender, EventArgs e)
+        {
+            // Khởi tạo đối tượng Form mới
+            ScanMissingSwfImageForm scanForm = new ScanMissingSwfImageForm();
+
+            // CÁCH 1: Mở dạng cửa sổ độc lập (Người dùng vẫn có thể bấm vào Form cũ)
+            scanForm.Show();
+
+            // CÁCH 2: Mở dạng hội thoại (Bắt buộc xử lý xong Form này mới quay lại được Form cũ)
+            // scanForm.ShowDialog(); 
         }
     }
 

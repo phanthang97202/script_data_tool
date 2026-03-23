@@ -23,3 +23,4 @@ G:\NghienCuuChuyenDoiDuLieuTLS_HPMU\ScriptDataTool\bin\Debug\System.Runtime.Comp
 G:\NghienCuuChuyenDoiDuLieuTLS_HPMU\ScriptDataTool\bin\Debug\System.Text.Encoding.CodePages.xml
 G:\NghienCuuChuyenDoiDuLieuTLS_HPMU\ScriptDataTool\bin\Debug\System.Threading.Tasks.Extensions.xml
 G:\NghienCuuChuyenDoiDuLieuTLS_HPMU\ScriptDataTool\obj\Debug\ScriptDa.1A2A73CF.Up2Date
+G:\NghienCuuChuyenDoiDuLieuTLS_HPMU\ScriptDataTool\obj\Debug\ScriptDataTool.UnZipForm.resources
