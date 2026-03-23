@@ -1,10 +1,13 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Data.SqlClient;
+using System.Diagnostics;
+using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 
 namespace ScriptDataTool
 {
@@ -29,9 +32,30 @@ namespace ScriptDataTool
                 dialog.Description = "Chọn thư mục nguồn chứa dữ liệu Flipping Book đã giải nén";
                 if (!string.IsNullOrEmpty(txtSourceFolder.Text))
                     dialog.SelectedPath = txtSourceFolder.Text;
-
                 if (dialog.ShowDialog() == DialogResult.OK)
                     txtSourceFolder.Text = dialog.SelectedPath;
+            }
+        }
+
+        private void btnChooseConverter_Click(object sender, EventArgs e)
+        {
+            using (var dlg = new OpenFileDialog())
+            {
+                dlg.Title = "Chọn SwfToJpgConverter.exe";
+                dlg.Filter = "Executable|*.exe";
+                if (dlg.ShowDialog() == DialogResult.OK)
+                    txtConverterPath.Text = dlg.FileName;
+            }
+        }
+
+        private void btnChooseFfdec_Click(object sender, EventArgs e)
+        {
+            using (var dlg = new OpenFileDialog())
+            {
+                dlg.Title = "Chọn ffdec-cli.exe";
+                dlg.Filter = "Executable|*.exe";
+                if (dlg.ShowDialog() == DialogResult.OK)
+                    txtFfdecPath.Text = dlg.FileName;
             }
         }
 
@@ -40,21 +64,27 @@ namespace ScriptDataTool
             if (_isRunning) return;
 
             string sourceFolder = txtSourceFolder.Text.Trim();
+            string converterPath = txtConverterPath.Text.Trim();
+            string ffdecPath = txtFfdecPath.Text.Trim();
+
             if (string.IsNullOrEmpty(sourceFolder) || !Directory.Exists(sourceFolder))
             {
                 MessageBox.Show("Vui lòng chọn thư mục nguồn hợp lệ.", "Cảnh báo",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning); return;
+            }
+            if (string.IsNullOrEmpty(converterPath) || !File.Exists(converterPath))
+            {
+                MessageBox.Show("Vui lòng chọn đường dẫn SwfToJpgConverter.exe hợp lệ.", "Cảnh báo",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning); return;
+            }
+            if (string.IsNullOrEmpty(ffdecPath) || !File.Exists(ffdecPath))
+            {
+                MessageBox.Show("Vui lòng chọn đường dẫn ffdec-cli.exe hợp lệ.", "Cảnh báo",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning); return;
             }
 
-            string connStr = System.Configuration.ConfigurationManager
-                                   .ConnectionStrings["MyDbConn"]?.ConnectionString;
-            if (string.IsNullOrEmpty(connStr))
-            {
-                MessageBox.Show("Không tìm thấy connection string 'DefaultConnection' trong App.config.",
-                    "Lỗi cấu hình", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
+            string connStr = GetConnStr();
+            if (connStr == null) return;
 
             SetRunningState(true);
             rtbLog.Clear();
@@ -62,41 +92,20 @@ namespace ScriptDataTool
 
             try
             {
-                await Task.Run(() => RunScan(sourceFolder, connStr, _cts.Token));
+                await Task.Run(() => RunScanAndConvert(sourceFolder, converterPath, ffdecPath, connStr, _cts.Token));
             }
-            catch (OperationCanceledException)
-            {
-                AppendLog("⚠ Đã dừng theo yêu cầu.", System.Drawing.Color.Yellow);
-            }
-            catch (Exception ex)
-            {
-                AppendLog($"❌ Lỗi không mong muốn: {ex.Message}", System.Drawing.Color.Red);
-            }
-            finally
-            {
-                SetRunningState(false);
-            }
+            catch (OperationCanceledException) { AppendLog("⚠ Đã dừng theo yêu cầu.", Color.Yellow); }
+            catch (Exception ex) { AppendLog($"❌ Lỗi: {ex.Message}", Color.Red); }
+            finally { SetRunningState(false); }
         }
 
-        private void btnStop_Click(object sender, EventArgs e)
-        {
-            _cts?.Cancel();
-        }
-
-        private void btnClearLog_Click(object sender, EventArgs e)
-        {
-            rtbLog.Clear();
-        }
+        private void btnStop_Click(object sender, EventArgs e) => _cts?.Cancel();
+        private void btnClearLog_Click(object sender, EventArgs e) => rtbLog.Clear();
 
         // ──────────────────────────────────────────────────────────────
-        // LOGIC CHÍNH
+        // LOGIC CHÍNH — QUÉT + CONVERT TỪNG FILE + LƯU DB
         // ──────────────────────────────────────────────────────────────
 
-        /// <summary>
-        /// Xác định suffix của folder pages trong path.
-        /// Flipping Book thực tế: \files\assets\pages
-        /// Các biến thể khác:     \files\pages  hoặc  \pages
-        /// </summary>
         private static string GetPagesSuffix(string dirPath)
         {
             if (dirPath.EndsWith(@"\files\assets\pages", StringComparison.OrdinalIgnoreCase))
@@ -108,101 +117,166 @@ namespace ScriptDataTool
             return null;
         }
 
-        private void RunScan(string sourceFolder, string connStr, CancellationToken token)
+        private void RunScanAndConvert(string sourceFolder, string converterPath,
+                                       string ffdecPath, string connStr, CancellationToken token)
         {
             AppendLog($"🔍 Bắt đầu quét từ: {sourceFolder}");
             AppendLog(new string('=', 90));
 
+            // ── Phase 1: Thu thập SWF thiếu JPG ──────────────────────
             var allSwfFiles = Directory.GetFiles(sourceFolder, "page*.swf", SearchOption.AllDirectories);
-            AppendLog($"📄 Tổng số file page*.swf tìm thấy (toàn bộ): {allSwfFiles.Length}");
+            AppendLog($"📄 Tổng số file page*.swf tìm thấy: {allSwfFiles.Length}");
             AppendLog(new string('-', 90));
 
-            int totalScanned = 0;
-            int totalHasImage = 0;
-            int totalMissing = 0;
-            int totalInserted = 0;
-            int totalError = 0;
+            // Danh sách SWF thiếu JPG: (swfPath, pagesFolder, pagesSuffix)
+            var missingList = new List<(string SwfPath, string PagesFolder, string PagesSuffix)>();
+
+            int totalScanned = 0, totalHasImage = 0;
+
+            foreach (var swfPath in allSwfFiles)
+            {
+                token.ThrowIfCancellationRequested();
+
+                string parentDir = Path.GetDirectoryName(swfPath) ?? "";
+                string pagesSuffix = GetPagesSuffix(parentDir);
+                if (pagesSuffix == null) continue;
+
+                totalScanned++;
+
+                string baseName = Path.GetFileNameWithoutExtension(swfPath);
+                string mediumJpg = Path.Combine(parentDir, baseName + ".jpg");
+
+                if (File.Exists(mediumJpg))
+                {
+                    totalHasImage++;
+                    AppendLog($"Có ảnh: {totalHasImage} ", Color.Green);
+                    continue; // Đã có JPG → bỏ qua hoàn toàn, không convert, không lưu DB
+                }
+
+                missingList.Add((swfPath, parentDir, pagesSuffix));
+            }
+
+            AppendLog($"✅ Quét xong | Tổng SWF: {totalScanned} | " +
+                      $"Có ảnh: {totalHasImage} | Thiếu JPG: {missingList.Count}");
+            AppendLog(new string('-', 90));
+
+            if (missingList.Count == 0)
+            {
+                AppendLog("🎉 Tất cả SWF đã có ảnh JPG tương ứng!", Color.Cyan);
+                SetStatus("Hoàn thành. Không có SWF nào thiếu ảnh.");
+                return;
+            }
+
+            // ── Phase 2: Convert từng file SWF thiếu + lưu DB ────────
+            AppendLog($"🖼 Bắt đầu convert {missingList.Count} file SWF thiếu ảnh...");
+            AppendLog(new string('-', 90));
+
+            int processed = 0, fileOk = 0, fileFail = 0;
 
             using (var conn = new SqlConnection(connStr))
             {
                 conn.Open();
 
-                foreach (var swfPath in allSwfFiles)
+                foreach (var (swfPath, pagesFolder, pagesSuffix) in missingList)
                 {
                     token.ThrowIfCancellationRequested();
+                    processed++;
 
-                    string parentDir = Path.GetDirectoryName(swfPath) ?? "";
-
-                    // Xác định loại cấu trúc thư mục pages
-                    string pagesSuffix = GetPagesSuffix(parentDir);
-                    if (pagesSuffix == null)
-                        continue;
-
-                    totalScanned++;
-
-                    // Kiểm tra file ảnh medium: pageXXXX.jpg (không có _l, _s)
-                    string baseName = Path.GetFileNameWithoutExtension(swfPath);
-
-                    if(parentDir.Contains("LuanVanBsckiiNguyenThiTuyet"))
-                    {
-                        Console.WriteLine("Debug");
-                    }
-
-                    string mediumJpg = Path.Combine(parentDir, baseName + ".jpg");
-
-                    if (File.Exists(mediumJpg))
-                    {
-                        AppendLog($"=> CÓ ẢNH | {Path.GetFileName(swfPath)}", System.Drawing.Color.Green);
-                        totalHasImage++;
-                        continue;
-                    }
-
-                    // Thiếu ảnh medium
-                    totalMissing++;
-
-                    // docRoot = bỏ suffix \files\assets\pages
-                    string docRoot = parentDir.Substring(0, parentDir.Length - pagesSuffix.Length);
-
+                    // Lấy Id_ILib từ docRoot
+                    string docRoot = pagesFolder.Substring(0, pagesFolder.Length - pagesSuffix.Length);
                     string idILib = QueryIdILib(conn, docRoot);
 
                     if (idILib == null)
                     {
-                        // Log chi tiết để dễ debug: in ra docRoot đang tìm
-                        AppendLog($"⚠ Không tìm được Id_ILib | docRoot: [{docRoot}]", System.Drawing.Color.Yellow);
-                        totalError++;
+                        AppendLog($"⚠ Không tìm được Id_ILib | [{Path.GetFileName(swfPath)}] | {docRoot}",
+                                  Color.Yellow);
+                        InsertRecord(conn, "UNKNOWN", swfPath, -1);
+                        fileFail++;
                         continue;
                     }
 
-                    bool ok = InsertMissingRecord(conn, idILib, swfPath);
-                    if (ok)
+                    // Gọi converter cho đúng 1 file SWF này:
+                    // -i <swfPath> -o <pagesFolder> -f <ffdec> --overwrite
+                    bool converterOk = RunConverterForFile(converterPath, swfPath, pagesFolder, ffdecPath);
+
+                    // Kiểm tra JPG thực sự được tạo ra không
+                    string baseName = Path.GetFileNameWithoutExtension(swfPath);
+                    string outputJpg = Path.Combine(pagesFolder, baseName + ".jpg");
+
+                    if (converterOk && File.Exists(outputJpg))
                     {
-                        totalInserted++;
-                        AppendLog(
-                            $"✔ THIẾU ẢNH | Id: {idILib} | {Path.GetFileName(swfPath)} | {docRoot}",
-                            System.Drawing.Color.Orange);
+                        InsertRecord(conn, idILib, swfPath, 1); // Status = 1 Done
+                        fileOk++;
+                        AppendLog($"[{processed}/{missingList.Count}] ✔ {Path.GetFileName(swfPath)}",
+                                  Color.LimeGreen);
                     }
                     else
                     {
-                        totalError++;
+                        InsertRecord(conn, idILib, swfPath, -1); // Status = -1 Error
+                        fileFail++;
+                        AppendLog($"[{processed}/{missingList.Count}] ❌ {Path.GetFileName(swfPath)} | {pagesFolder}",
+                                  Color.Red);
                     }
 
-                    if (totalScanned % 100 == 0)
-                        SetStatus($"Đang quét... {totalScanned} trang | Có ảnh: {totalHasImage} | Thiếu: {totalMissing}");
+                    if (processed % 20 == 0)
+                        SetStatus($"Đang convert... {processed}/{missingList.Count} | OK: {fileOk} | Lỗi: {fileFail}");
                 }
             }
 
             AppendLog(new string('=', 90));
-            AppendLog(
-                $"✅ HOÀN THÀNH | Đã quét: {totalScanned} trang | Có ảnh: {totalHasImage} | Thiếu ảnh: {totalMissing} | Đã lưu DB: {totalInserted} | Lỗi: {totalError}",
-                System.Drawing.Color.Cyan);
-            SetStatus($"Hoàn thành. Có ảnh: {totalHasImage} | Thiếu ảnh: {totalMissing} | Đã lưu DB: {totalInserted} | Lỗi: {totalError}");
+            AppendLog($"✅ HOÀN THÀNH | Tổng xử lý: {processed} | Done: {fileOk} | Lỗi: {fileFail}",
+                      Color.Cyan);
+            SetStatus($"Xong. Done: {fileOk} | Lỗi: {fileFail}");
         }
 
         /// <summary>
-        /// Tìm Id_ILib trong ScriptMappingData theo File_Path_KPS.
-        /// Dùng LTRIM/RTRIM + so sánh cả 2 dạng (có và không có dấu \ cuối)
-        /// để tránh lỗi do khoảng trắng hoặc dấu \ thừa trong DB.
+        /// Gọi SwfToJpgConverter.exe cho đúng 1 file SWF:
+        ///   -i "pageXXXX.swf"  -o "pagesFolder"  -f "ffdec"  --overwrite
+        /// Trả về true nếu ExitCode = 0.
         /// </summary>
+        private bool RunConverterForFile(string converterPath, string swfFilePath,
+                                         string outputFolder, string ffdecPath)
+        {
+            try
+            {
+                // -i nhận file hoặc folder, --overwrite để ghi đè nếu tồn tại
+                string args = $"-i \"{swfFilePath}\" -o \"{outputFolder}\" -f \"{ffdecPath}\" --overwrite";
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = converterPath,
+                    Arguments = args,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+
+                using (var process = new Process { StartInfo = psi })
+                {
+                    // Chỉ log stderr (lỗi) để tránh log quá nhiều
+                    process.ErrorDataReceived += (s, ev) =>
+                    { if (!string.IsNullOrWhiteSpace(ev.Data)) AppendLog($"   ! {ev.Data}", Color.OrangeRed); };
+
+                    process.Start();
+                    process.BeginOutputReadLine();
+                    process.BeginErrorReadLine();
+                    process.WaitForExit();
+
+                    return process.ExitCode == 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"   → Process error: {ex.Message}", Color.Red);
+                return false;
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // DB HELPERS
+        // ──────────────────────────────────────────────────────────────
+
         private string QueryIdILib(SqlConnection conn, string docRoot)
         {
             const string sql = @"
@@ -222,66 +296,71 @@ namespace ScriptDataTool
                 cmd.Parameters.AddWithValue("@PathSlash", cleanSlash);
                 cmd.Parameters.AddWithValue("@PathLower", clean.ToLowerInvariant());
                 cmd.Parameters.AddWithValue("@PathSlashLower", cleanSlash.ToLowerInvariant());
-                var result = cmd.ExecuteScalar();
-                return result?.ToString();
+                return cmd.ExecuteScalar()?.ToString();
             }
         }
 
         /// <summary>
-        /// Insert bản ghi vào MissingImgFromSwf. Bỏ qua nếu đã tồn tại.
+        /// Insert record với Status chỉ định.
+        /// Nếu đã tồn tại → UPDATE Status.
+        /// Status: -1 Error | 1 Done
         /// </summary>
-        private bool InsertMissingRecord(SqlConnection conn, string idILib, string filePath)
+        private void InsertRecord(SqlConnection conn, string idILib, string filePath, short status)
         {
             const string sql = @"
-                IF NOT EXISTS (
+                IF EXISTS (
                     SELECT 1 FROM dbo.MissingImgFromSwf
                     WHERE Id = @Id AND FilePath = @FilePath
                 )
-                INSERT INTO dbo.MissingImgFromSwf (Id, FilePath)
-                VALUES (@Id, @FilePath)";
-
+                    UPDATE dbo.MissingImgFromSwf
+                    SET    Status = @Status
+                    WHERE  Id = @Id AND FilePath = @FilePath
+                ELSE
+                    INSERT INTO dbo.MissingImgFromSwf (Id, FilePath, Status)
+                    VALUES (@Id, @FilePath, @Status)";
             try
             {
                 using (var cmd = new SqlCommand(sql, conn))
                 {
                     cmd.Parameters.AddWithValue("@Id", idILib);
                     cmd.Parameters.AddWithValue("@FilePath", filePath);
+                    cmd.Parameters.AddWithValue("@Status", status);
                     cmd.ExecuteNonQuery();
-                    return true;
                 }
             }
             catch (Exception ex)
             {
-                AppendLog($"   → DB Error: {ex.Message}", System.Drawing.Color.Red);
-                return false;
+                AppendLog($"   → DB Error: {ex.Message}", Color.Red);
             }
         }
 
         // ──────────────────────────────────────────────────────────────
-        // HELPERS — Thread-safe UI update
+        // HELPERS CHUNG
         // ──────────────────────────────────────────────────────────────
 
-        private void AppendLog(string message, System.Drawing.Color? color = null)
+        private string GetConnStr()
         {
-            if (rtbLog.InvokeRequired)
-            {
-                rtbLog.Invoke(new Action(() => AppendLog(message, color)));
-                return;
-            }
+            string connStr = System.Configuration.ConfigurationManager
+                                   .ConnectionStrings["MyDbConn"]?.ConnectionString;
+            if (string.IsNullOrEmpty(connStr))
+                MessageBox.Show("Không tìm thấy connection string 'MyDbConn' trong App.config.",
+                    "Lỗi cấu hình", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return connStr;
+        }
+
+        private void AppendLog(string message, Color? color = null)
+        {
+            if (rtbLog.InvokeRequired) { rtbLog.Invoke(new Action(() => AppendLog(message, color))); return; }
             rtbLog.SelectionStart = rtbLog.TextLength;
             rtbLog.SelectionLength = 0;
-            rtbLog.SelectionColor = color ?? System.Drawing.Color.Lime;
+            rtbLog.SelectionColor = color ?? Color.Lime;
             rtbLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}\n");
             rtbLog.ScrollToCaret();
         }
 
         private void SetStatus(string message)
         {
-            if (lblStatus.InvokeRequired)
-            {
-                lblStatus.Invoke(new Action(() => SetStatus(message)));
-                return;
-            }
+            if (lblStatus.InvokeRequired) { lblStatus.Invoke(new Action(() => SetStatus(message))); return; }
             lblStatus.Text = message;
         }
 
