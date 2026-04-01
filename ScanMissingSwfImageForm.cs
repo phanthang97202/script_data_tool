@@ -106,8 +106,21 @@ namespace ScriptDataTool
         // LOGIC CHÍNH — QUÉT + CONVERT TỪNG FILE + LƯU DB
         // ──────────────────────────────────────────────────────────────
 
+        private static string GetPagesSuffix_Old(string dirPath)
+        {
+            if (dirPath.EndsWith(@"\files\assets\pages", StringComparison.OrdinalIgnoreCase))
+                return @"\files\assets\pages";
+            if (dirPath.EndsWith(@"\files\pages", StringComparison.OrdinalIgnoreCase))
+                return @"\files\pages";
+            if (dirPath.EndsWith(@"\pages", StringComparison.OrdinalIgnoreCase))
+                return @"\pages";
+            return null;
+        }
+
         private static string GetPagesSuffix(string dirPath)
         {
+            if (dirPath.EndsWith(@"\files\assets\flash\pages", StringComparison.OrdinalIgnoreCase))
+                return @"\files\assets\flash\pages";
             if (dirPath.EndsWith(@"\files\assets\pages", StringComparison.OrdinalIgnoreCase))
                 return @"\files\assets\pages";
             if (dirPath.EndsWith(@"\files\pages", StringComparison.OrdinalIgnoreCase))
@@ -185,6 +198,14 @@ namespace ScriptDataTool
                     // Lấy Id_ILib từ docRoot
                     string docRoot = pagesFolder.Substring(0, pagesFolder.Length - pagesSuffix.Length);
                     string idILib = QueryIdILib(conn, docRoot);
+
+                    // Fallback: thử lên 1 cấp cha (trường hợp folder bị lồng thêm 1 cấp như \Buituananh45\Buituananh45)
+                    if (idILib == null)
+                    {
+                        string parentDocRoot = Path.GetDirectoryName(docRoot);
+                        if (!string.IsNullOrEmpty(parentDocRoot))
+                            idILib = QueryIdILib(conn, parentDocRoot);
+                    }
 
                     if (idILib == null)
                     {
@@ -372,6 +393,18 @@ namespace ScriptDataTool
             btnStop.Enabled = running;
             btnChooseFolder.Enabled = !running;
             progressBar.Visible = running;
+        }
+
+        private void btnCreateMets_Click(object sender, EventArgs e)
+        {
+            // Khởi tạo đối tượng Form mới
+            FlippingBookToMetsForm scanForm = new FlippingBookToMetsForm();
+
+            // CÁCH 1: Mở dạng cửa sổ độc lập (Người dùng vẫn có thể bấm vào Form cũ)
+            scanForm.Show();
+
+            // CÁCH 2: Mở dạng hội thoại (Bắt buộc xử lý xong Form này mới quay lại được Form cũ)
+            // scanForm.ShowDialog(); 
         }
     }
 }

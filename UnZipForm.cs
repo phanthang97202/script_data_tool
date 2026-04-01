@@ -175,8 +175,24 @@ namespace ScriptDataTool
                 string nameNoExt = Path.GetFileNameWithoutExtension(filePath);
 
                 // Thư mục output tương ứng với folder hiện tại
+                // 2019.rar nằm trực tiếp trong _rootInputFolder → giải nén thẳng ra output
+                //            G:\OutputUnZip\
+                //  ├── 2019\01\03\BibIdFolder\...  ✔
+                //  ├── 2019\02\15\BibIdFolder\...  ✔
+                //  └── 2020\04\22\BibIdFolder\...  ✔
+
+                //// ZIP con bên trong BibId → giữ nguyên logic cũ
+                //    G:\OutputUnZip\2019\01\03\BibIdFolder\
+                //      └── TenFile\...  ✔
                 string mirroredFolder = GetMirroredOutputPath(folder);
-                string extractDir = Path.Combine(mirroredFolder, nameNoExt);
+                bool isTopLevelArchive = string.Equals(
+                                        Path.GetDirectoryName(filePath),
+                                        _rootInputFolder,
+                                        StringComparison.OrdinalIgnoreCase);
+
+                string extractDir = isTopLevelArchive
+                    ? _rootOutputFolder
+                    : Path.Combine(mirroredFolder, nameNoExt);
 
                 AppendLog("[ZIP/RAR] " + Path.GetFileName(filePath));
                 AppendLog("  → " + extractDir);

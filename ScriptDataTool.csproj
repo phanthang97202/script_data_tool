@@ -35,6 +35,13 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="MarcXmlParser, Version=9.3.3.0, Culture=neutral, PublicKeyToken=4e1c0c7d11f1dd64, processorArchitecture=MSIL">
+      <HintPath>packages\MarcXmlParser.9.3.3\lib\net48\MarcXmlParser.dll</HintPath>
+    </Reference>
+    <Reference Include="MetsXmlParser, Version=4.2.6.0, Culture=neutral, PublicKeyToken=4e1c0c7d11f1dd64, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\PdfConverter\UMPPdfToMets\bin\Debug\MetsXmlParser.dll</HintPath>
+    </Reference>
     <Reference Include="Microsoft.Bcl.AsyncInterfaces, Version=10.0.0.0, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51, processorArchitecture=MSIL">
       <HintPath>packages\Microsoft.Bcl.AsyncInterfaces.10.0.0\lib\net462\Microsoft.Bcl.AsyncInterfaces.dll</HintPath>
     </Reference>
@@ -81,6 +88,13 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="FlippingBookToMetsConverter.cs" />
+    <Compile Include="FlippingBookToMetsForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="FlippingBookToMetsForm.Designer.cs">
+      <DependentUpon>FlippingBookToMetsForm.cs</DependentUpon>
+    </Compile>
     <Compile Include="UnZipForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -105,6 +119,9 @@
       <AutoGen>True</AutoGen>
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
+    <EmbeddedResource Include="ScanMissingSwfImageForm.resx">
+      <DependentUpon>ScanMissingSwfImageForm.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="UnZipForm.resx">
       <DependentUpon>UnZipForm.cs</DependentUpon>
     </EmbeddedResource>

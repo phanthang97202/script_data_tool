@@ -24,3 +24,6 @@ G:\NghienCuuChuyenDoiDuLieuTLS_HPMU\ScriptDataTool\bin\Debug\System.Text.Encodin
 G:\NghienCuuChuyenDoiDuLieuTLS_HPMU\ScriptDataTool\bin\Debug\System.Threading.Tasks.Extensions.xml
 G:\NghienCuuChuyenDoiDuLieuTLS_HPMU\ScriptDataTool\obj\Debug\ScriptDa.1A2A73CF.Up2Date
 G:\NghienCuuChuyenDoiDuLieuTLS_HPMU\ScriptDataTool\obj\Debug\ScriptDataTool.UnZipForm.resources
+G:\NghienCuuChuyenDoiDuLieuTLS_HPMU\ScriptDataTool\bin\Debug\MarcXmlParser.dll
+G:\NghienCuuChuyenDoiDuLieuTLS_HPMU\ScriptDataTool\bin\Debug\MetsXmlParser.dll
+G:\NghienCuuChuyenDoiDuLieuTLS_HPMU\ScriptDataTool\obj\Debug\ScriptDataTool.ScanMissingSwfImageForm.resources
